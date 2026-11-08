@@ -1,0 +1,171 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// enums bcz we need to define roles, status and auction triggers.
+enum UserRole {
+  BUYER
+  SUPPLIER
+}
+
+enum RfqStatus {
+  DRAFT
+  PUBLISHED
+  ACTIVE
+  CLOSED
+  FORCE_CLOSED
+  CANCELLED
+}
+
+enum SupplierInvitationStatus {
+  INVITED
+  ACCEPTED
+  DECLINED
+}
+
+enum AuctionTriggerType {
+  BID_RECEIVED
+  ANY_RANK_CHANGE
+  L1_RANK_CHANGE
+}
+
+enum AuctionEventType {
+  SUPPLIER_INVITED
+  BID_SUBMITTED
+  RANK_CHANGED
+  TIME_EXTENDED
+  AUCTION_CLOSED
+  FORCE_CLOSED
+}
+
+model User {
+  id       String   @id @default(uuid()) @db.Uuid
+  name     String
+  email    String   @unique
+  password String
+  role     UserRole
+
+  companyName String?
+  phone       String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  buyerRfqs     Rfq[]          @relation("RfqBuyer")
+  supplierRfqs  RfqSupplier[]
+  bids          Bid[]
+  auctionEvents AuctionEvent[] @relation("EventActor")
+}
+
+model Rfq {
+  id          String  @id @default(uuid()) @db.Uuid
+  referenceId String  @unique
+  title       String
+  description String?
+
+  buyerId String @db.Uuid
+
+  bidStartAt       DateTime @db.Timestamptz(3)
+  bidCloseAt       DateTime @db.Timestamptz(3)
+  forcedBidCloseAt DateTime @db.Timestamptz(3)
+
+  serviceDate DateTime? @db.Timestamptz(3)
+
+  status         RfqStatus @default(DRAFT)
+  auctionEnabled Boolean   @default(true)
+
+  //auction configuration
+  triggerWindowMinutes     Int                @default(10)
+  extensionDurationMinutes Int                @default(5)
+  extensionTrigger         AuctionTriggerType @default(BID_RECEIVED)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  buyer     User           @relation("RfqBuyer", fields: [buyerId], references: [id], onDelete: Restrict)
+  suppliers RfqSupplier[]
+  bids      Bid[]
+  events    AuctionEvent[]
+
+  @@index([buyerId])
+  @@index([status, bidCloseAt])
+}
+
+model RfqSupplier {
+  id         String @id @default(uuid()) @db.Uuid
+  rfqId      String @db.Uuid
+  supplierId String @db.Uuid
+
+  status SupplierInvitationStatus @default(INVITED)
+
+  invitedAt   DateTime  @default(now()) @db.Timestamptz(3)
+  respondedAt DateTime? @db.Timestamptz(3)
+
+  rfq      Rfq  @relation(fields: [rfqId], references: [id], onDelete: Cascade)
+  supplier User @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+
+  @@unique([rfqId, supplierId])
+  @@index([supplierId, status])
+}
+
+model Bid {
+  id String @id @default(uuid()) @db.Uuid
+
+  rfqId      String @db.Uuid
+  supplierId String @db.Uuid
+
+  carrierName String
+
+  freightCharges     Decimal @db.Decimal(14, 2)
+  originCharges      Decimal @db.Decimal(14, 2)
+  destinationCharges Decimal @db.Decimal(14, 2)
+
+  // Calculated by backend
+  totalAmount Decimal @db.Decimal(14, 2)
+
+  transitTime   String
+  validityUntil DateTime? @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  rfq      Rfq            @relation(fields: [rfqId], references: [id], onDelete: Cascade)
+  supplier User           @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  events   AuctionEvent[]
+
+  @@index([rfqId, createdAt])
+  @@index([rfqId, supplierId, createdAt])
+  @@index([rfqId, totalAmount])
+}
+
+model AuctionEvent {
+  id String @id @default(uuid()) @db.Uuid
+
+  rfqId   String  @db.Uuid
+  actorId String? @db.Uuid
+  bidId   String? @db.Uuid
+
+  type AuctionEventType
+
+  message String?
+  reason  String?
+
+  previousBidCloseAt DateTime? @db.Timestamptz(3)
+  newBidCloseAt      DateTime? @db.Timestamptz(3)
+
+  metadata Json?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  rfq   Rfq   @relation(fields: [rfqId], references: [id], onDelete: Cascade)
+  actor User? @relation("EventActor", fields: [actorId], references: [id], onDelete: SetNull)
+  bid   Bid?  @relation(fields: [bidId], references: [id], onDelete: SetNull)
+
+  @@index([rfqId, createdAt])
+  @@index([actorId])
+  @@index([type])
+}
